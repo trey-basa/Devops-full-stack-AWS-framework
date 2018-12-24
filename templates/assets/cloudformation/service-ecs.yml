@@ -1,0 +1,533 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MU service in a specific environment containing an ALB target group with ECS service and task definition
+Parameters:
+  Namespace:
+    Type: String
+    Description: Namespace for stack prefixes
+  EnvironmentName:
+    Type: String
+    Description: Name of environment used for resource namespace
+  EcsServiceRoleArn:
+    Type: String
+    Description: ARN of IAM role for ECS service to assume
+  EcsTaskRoleArn:
+    Type: String
+    Description: ARN of IAM role for ECS task to assume
+  ApplicationAutoScalingRoleArn:
+    Type: String
+    Description: ARN of IAM role for ECS autoscaling
+  ServiceName:
+    Type: String
+    Description: Name of service
+  ImageUrl:
+    Type: String
+    Description: Docker Image URL
+  MaximumPercent:
+    Type: String
+    Description: Maximum percent for deployment strategy
+    Default: '200'
+  MinimumHealthyPercent:
+    Type: String
+    Description: Minimum percent for deployment strategy
+    Default: '100'
+  ServicePort:
+    Type: String
+    Description: Port exposed in service
+    Default: '8080'
+  ServiceProtocol:
+    Type: String
+    Description: Protocol for port exposed in service
+    Default: 'HTTP'
+    AllowedValues:
+    - HTTP
+    - HTTPS
+  ServiceHealthEndpoint:
+    Type: String
+    Description: Endpoint to test service health
+    Default: '/health'
+  ServiceCpu:
+    Type: String
+    Description: CPU units to reserve for container
+    Default: '10'
+  ServiceMemory:
+    Type: String
+    Description: Memory to allocate to contianer (in MiB)
+    Default: '300'
+  ServiceDesiredCount:
+    Type: Number
+    Default: '2'
+    Description: Number of containers to launch in your ECS service.
+  ServiceMinSize:
+    Type: Number
+    Default: '1'
+    Description: Minimum number of instances that can be launched
+  ServiceMaxSize:
+    Type: Number
+    Default: '2'
+    Description: Maximum number of instances that can be launched
+  PathPattern:
+    Type: CommaDelimitedList
+    Description: List of paths to route to the service.
+    Default: ''
+  PathListenerRulePriority:
+    Type: Number
+    Description: The priority of the path rule being added to the listener
+    Default: 1
+  HostPattern:
+    Type: CommaDelimitedList
+    Description: List of hosts to route to the service.
+    Default: ''
+  HostListenerRulePriority:
+    Type: Number
+    Description: The priority of the host rule being added to the listener
+    Default: 2
+  VpcId:
+    Type: String
+    Description: Name of the value to import for the VpcId
+  EcsCluster:
+    Type: String
+    Description: Name of the value to import for Ecs Cluster to deploy to.
+  ElbHttpListenerArn:
+    Type: String
+    Description: Name of the value to import for the Arn of the ELB listener to attach the target group to.
+  ElbHttpsListenerArn:
+    Type: String
+    Description: Name of the value to import for the Arn of the ELB listener to attach the target group to.
+    Default: ''
+  DatabaseName:
+    Type: String
+    Description: Name of database
+    Default: ""
+  DatabaseMasterUsername:
+    Type: String
+    Description: Username of database
+    Default: ""
+  DatabaseMasterPassword:
+    Type: String
+    NoEcho: true
+    Description: Password of database
+    Default: ""
+  DatabaseEndpointAddress:
+    Type: String
+    Description: Endpoint address of database
+    Default: ""
+  DatabaseEndpointPort:
+    Type: String
+    Description: Endpoint port of database
+    Default: ""
+  TargetCPUUtilization:
+    Type: String
+    Description: Target CPU Utilization for Tracking Policy on ASG
+    Default: '75'
+  TaskCpu:
+    Type: String
+    Description: CPU for task
+    Default: ''
+  TaskMemory:
+    Type: String
+    Description: Memory for task
+    Default: ''
+  TaskNetworkMode:
+    Type: String
+    Default: bridge
+    AllowedValues:
+      - awsvpc
+      - none
+      - host
+      - bridge
+    Description: Network mode for tasks
+  PrivilegedMode:
+    Type: String
+    Default: false
+    AllowedValues:
+      - true
+      - false 
+    Description: Container privileged mode
+  Links:
+    Description: Links to other docker containers
+    Type: CommaDelimitedList
+    Default: ''
+  LaunchType:
+    Type: String
+    Description: Name of value to import for service launch type
+  ServiceSubnetIds:
+    Type: String
+    Description: Name of the value to import for the ecs subnet ids
+  ServiceSecurityGroup:
+    Type: String
+    Description: Name of the value to import for the security group id
+  ElbSecurityGroup:
+    Type: String
+    Description: Name of the value to import for the ELB group id
+  ServiceDiscoveryTTL:
+    Type: String
+    Description: The amount of time, in seconds, that you want DNS resolvers to cache the settings for this record.
+    Default: '60'
+  ServiceDiscoveryId:
+    Type: String
+    Description: Name of the value to import for the service discovery namespace id
+  ServiceDiscoveryName:
+    Type: String
+    Description: Name of the value to import for the service discovery namespace name
+  AssignPublicIp:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Whether to assign a public IP to the service, this is only applicable to awsvpc networked tasks
+Conditions:
+  HasPathPattern:
+    "Fn::Not":
+      - "Fn::Equals":
+        - "Fn::Join":
+          - ''
+          - !Ref PathPattern
+        - ''
+  HasHostPattern:
+    "Fn::Not":
+      - "Fn::Equals":
+        - "Fn::Join":
+          - ''
+          - !Ref HostPattern
+        - ''
+  HasTargetGroup:
+    "Fn::Or":
+    - !Condition HasPathPattern
+    - !Condition HasHostPattern
+  HasElbHttpPathListener:
+    "Fn::And":
+    - "Fn::Not":
+       - "Fn::Equals":
+         - !Sub ${ElbHttpListenerArn}
+         - ''
+    - !Condition HasPathPattern
+  HasElbHttpsPathListener:
+    "Fn::And":
+    - "Fn::Not":
+       - "Fn::Equals":
+         - !Sub ${ElbHttpsListenerArn}
+         - ''
+    - !Condition HasPathPattern
+  HasElbHttpHostListener:
+    "Fn::And":
+    - "Fn::Not":
+       - "Fn::Equals":
+         - !Sub ${ElbHttpListenerArn}
+         - ''
+    - !Condition HasHostPattern
+  HasElbHttpsHostListener:
+    "Fn::And":
+    - "Fn::Not":
+       - "Fn::Equals":
+         - !Sub ${ElbHttpsListenerArn}
+         - ''
+    - !Condition HasHostPattern
+  HasAwsVpcNetworkMode:
+    "Fn::Equals":
+      - !Sub ${TaskNetworkMode}
+      - 'awsvpc'
+  HasLinks:
+    "Fn::Not":
+      - "Fn::Equals":
+        - "Fn::Join":
+          - ''
+          - !Ref Links
+        - ''
+  HasTaskMemory:
+    "Fn::Not":
+      - "Fn::Equals":
+        - !Ref TaskMemory
+        - ''
+  HasTaskCpu:
+    "Fn::Not":
+      - "Fn::Equals":
+        - !Ref TaskCpu
+        - ''
+  IsAssignPublicIpEnabled:
+    "Fn::Equals":
+      - !Ref AssignPublicIp
+      - 'true'
+Resources:
+  EcsServiceName:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      DnsConfig: 
+        NamespaceId:
+          Fn::ImportValue: !Sub ${ServiceDiscoveryId}
+        DnsRecords:
+        - Type: SRV
+          TTL: !Ref ServiceDiscoveryTTL
+        - Fn::If:
+          - HasAwsVpcNetworkMode
+          - Type: A
+            TTL: !Ref ServiceDiscoveryTTL
+          - !Ref AWS::NoValue
+      HealthCheckCustomConfig: 
+        FailureThreshold: 1
+      Name: 
+        Ref: ServiceName
+  EcsService:
+    Type: AWS::ECS::Service
+    DependsOn:
+    - ServiceLogGroup
+    Properties:
+      ServiceName: !Sub "${Namespace}-${ServiceName}-${EnvironmentName}"
+      Cluster:
+        Fn::ImportValue: !Sub ${EcsCluster}
+      DesiredCount: !Ref ServiceDesiredCount
+      DeploymentConfiguration:
+        MaximumPercent: !Ref MaximumPercent
+        MinimumHealthyPercent: !Ref MinimumHealthyPercent
+      LaunchType:
+        Fn::ImportValue: !Sub ${LaunchType}
+      NetworkConfiguration:
+        Fn::If:
+          - HasAwsVpcNetworkMode
+          - AwsvpcConfiguration:
+              SecurityGroups:
+                - Fn::ImportValue: !Sub ${ElbSecurityGroup}
+                - Fn::ImportValue: !Sub ${ServiceSecurityGroup}
+              Subnets:
+                Fn::Split:
+                - ","
+                - Fn::ImportValue: !Sub ${ServiceSubnetIds}
+              AssignPublicIp:
+                Fn::If:
+                  - IsAssignPublicIpEnabled
+                  - ENABLED
+                  - DISABLED
+          - !Ref AWS::NoValue
+      LoadBalancers:
+        - Fn::If:
+          - HasTargetGroup
+          - ContainerName: !Ref ServiceName
+            ContainerPort: !Ref ServicePort
+            TargetGroupArn: !Ref ElbTargetGroup
+          - !Ref AWS::NoValue
+      TaskDefinition: !Ref MicroserviceTaskDefinition
+      ServiceRegistries:
+      - Fn::If:
+        - HasAwsVpcNetworkMode
+        - RegistryArn: !Sub ${EcsServiceName.Arn}
+          Port: !Ref ServicePort
+        - RegistryArn: !Sub ${EcsServiceName.Arn}
+          ContainerName: !Ref ServiceName
+          ContainerPort: !Ref ServicePort
+  ServiceLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Ref AWS::StackName
+  MicroserviceTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${AWS::StackName}
+      RequiresCompatibilities:
+      - Fn::ImportValue: !Sub ${LaunchType}
+      Cpu:
+        Fn::If:
+          - HasTaskCpu
+          - !Ref TaskCpu
+          - !Ref AWS::NoValue
+      Memory:
+        Fn::If:
+          - HasTaskMemory
+          - !Ref TaskMemory
+          - !Ref AWS::NoValue
+      NetworkMode: !Ref TaskNetworkMode
+      ContainerDefinitions:
+      - Name: !Ref ServiceName
+        Cpu: !Ref ServiceCpu
+        DockerLabels:
+          mu.service.discovery: !Ref ServiceDiscoveryName
+          mu.service.name: !Ref ServiceName
+          mu.service.port: !Ref ServicePort
+          mu.container.imageUrl: !Ref ImageUrl
+        Essential: 'true'
+        Image: !Ref ImageUrl
+        Memory: !Ref ServiceMemory
+        Links:
+          Fn::If:
+          - HasLinks
+          - !Ref Links
+          - !Ref AWS::NoValue
+        #DnsSearchDomains:
+        #- Fn::ImportValue: !Sub ${ServiceDiscoveryName}
+        Environment:
+        {{with .Environment}}
+          {{range $key, $val := .}}
+          - Name: {{$key}}
+            Value: !Sub {{$val}}
+          {{end}}
+        {{end}}
+          - Name: _SERVICE_DISCOVERY_NAME
+            Value:
+              Fn::ImportValue: !Sub ${ServiceDiscoveryName}
+          - Name: _PRIMARY_ELB_LISTENER
+            Value:
+              Fn::If:
+              - HasElbHttpPathListener
+              - !Ref ElbHttpPathListenerRule
+              - Fn::If:
+                - HasElbHttpsPathListener
+                - !Ref ElbHttpsPathListenerRule
+                - Fn::If:
+                  - HasElbHttpHostListener
+                  - !Ref ElbHttpHostListenerRule
+                  - Fn::If:
+                    - HasElbHttpsHostListener
+                    - !Ref ElbHttpsHostListenerRule
+                    - ''
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref AWS::StackName
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: container
+        Privileged: !Ref PrivilegedMode
+        PortMappings:
+        - HostPort:
+            Fn::If:
+              - HasAwsVpcNetworkMode
+              - !Ref AWS::NoValue
+              - 0
+          ContainerPort: !Ref ServicePort
+      Volumes: []
+      ExecutionRoleArn: !Ref EcsTaskRoleArn
+      TaskRoleArn: !Ref EcsTaskRoleArn
+  ElbHttpPathListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: HasElbHttpPathListener
+    Properties:
+      Actions:
+        - Fn::If:
+            - HasElbHttpsPathListener
+            - Type: redirect
+              RedirectConfig:
+                Port: "443"
+                Protocol: HTTPS
+                StatusCode: HTTP_301
+            - Type: forward
+              TargetGroupArn: !Ref ElbTargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values: !Ref PathPattern
+      ListenerArn:
+        Fn::ImportValue: !Sub ${ElbHttpListenerArn}
+      Priority: !Ref PathListenerRulePriority
+  ElbHttpsPathListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: HasElbHttpsPathListener
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref ElbTargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values: !Ref PathPattern
+      ListenerArn:
+        Fn::ImportValue: !Sub ${ElbHttpsListenerArn}
+      Priority: !Ref PathListenerRulePriority
+  ElbHttpHostListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: HasElbHttpHostListener
+    Properties:
+      Actions:
+        - Fn::If:
+            - HasElbHttpsHostListener
+            - Type: redirect
+              RedirectConfig:
+                Port: "443"
+                Protocol: HTTPS
+                StatusCode: HTTP_301
+            - Type: forward
+              TargetGroupArn: !Ref ElbTargetGroup
+      Conditions:
+      - Field: host-header
+        Values: !Ref HostPattern
+      ListenerArn:
+        Fn::ImportValue: !Sub ${ElbHttpListenerArn}
+      Priority: !Ref HostListenerRulePriority
+  ElbHttpsHostListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: HasElbHttpsHostListener
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref ElbTargetGroup
+      Conditions:
+      - Field: host-header
+        Values: !Ref HostPattern
+      ListenerArn:
+        Fn::ImportValue: !Sub ${ElbHttpsListenerArn}
+      Priority: !Ref HostListenerRulePriority
+  ElbTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: HasTargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: !Ref ServiceHealthEndpoint
+      HealthCheckProtocol: !Ref ServiceProtocol
+      HealthCheckTimeoutSeconds: 3
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200-299
+      Port: !Ref ServicePort
+      Protocol: !Ref ServiceProtocol
+      Tags:
+      - Key: Name
+        Value: !Ref AWS::StackName
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: 60
+      TargetType:
+        Fn::If:
+          - HasAwsVpcNetworkMode
+          - ip
+          - instance
+      UnhealthyThresholdCount: 5
+      VpcId:
+        Fn::ImportValue: !Sub ${VpcId}
+  CPUUtilizationPolicyTarget:
+    DependsOn:
+    - EcsService
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref ServiceMaxSize
+      MinCapacity: !Ref ServiceMinSize
+      ResourceId:
+        Fn::Sub:
+          - service/${EcsClusterName}/${Namespace}-${ServiceName}-${EnvironmentName}
+          - EcsClusterName:
+              Fn::ImportValue: !Ref EcsCluster
+      RoleARN: !Ref ApplicationAutoScalingRoleArn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+  CPUUtilizationPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyType: TargetTrackingScaling
+      PolicyName: !Sub ${AWS::StackName}-cpu-utilization
+      ScalingTargetId: !Ref CPUUtilizationPolicyTarget
+      TargetTrackingScalingPolicyConfiguration:
+        CustomizedMetricSpecification:
+          Dimensions: 
+            - Name: ClusterName
+              Value:
+                Fn::ImportValue: !Ref EcsCluster
+            - Name: ServiceName
+              Value: !Sub ${Namespace}-${ServiceName}-${EnvironmentName}
+          MetricName: CPUUtilization
+          Namespace: AWS/ECS
+          Statistic: Average
+        TargetValue: !Ref TargetCPUUtilization
+Outputs:
+  MicroserviceTaskDefinitionArn:
+    Description: Microservice TaskDefinition
+    Value: !Ref MicroserviceTaskDefinition
+  EcsCluster:
+    Description: Roadmap Cluster
+    Value:
+      Fn::ImportValue: !Ref EcsCluster

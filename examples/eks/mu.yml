@@ -1,0 +1,63 @@
+---
+
+environments:
+  - name: acceptance
+    provider: eks
+  - name: production
+    provider: eks
+
+service:
+  name: eks-example
+  healthEndpoint: /
+  port: 80
+  pathPatterns:
+    - /*
+  database:
+    name: sample
+    engine: aurora
+    engineMode: serverless
+
+  ## Map environment variables from one's provided as secrets
+  environment:
+    DB_HOST: $(DatabaseEndpointAddress)
+    DB_PORT: $(DatabaseEndpointPort)
+    DB_USERNAME: $(DatabaseMasterUsername)
+    DB_PASSWORD: $(DatabaseMasterPassword)
+
+
+## The resources can be customized below
+templates:
+  mu-environment-acceptance-ConfigMap-aws-auth:   
+    data:
+      mapUsers: |
+        - userarn: arn:aws:iam::00000000000:user/casey.lee
+          username: casey-lee
+          groups:
+          - system:masters
+
+## example of replacing entire spec files via extentions
+extensions:
+  - url: custom-ingress
+
+
+## Configure EKS RBAC 
+rbac:
+
+  ## Give the `alice` IAM user full admin access to all environments
+  - role: admin
+    users:
+    - alice
+
+  ## Give the `bob` IAM user read-only access to all environments
+  - role: view
+    users:
+    - bob
+
+  ## Give the `foo`, `bar` and `baz` mu services access to deploy to the `acceptance` environment
+  - role: deploy
+    environments:
+    - acceptance
+    services:
+    - foo
+    - bar
+    - baz
